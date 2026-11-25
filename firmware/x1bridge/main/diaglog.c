@@ -10,7 +10,11 @@
 #include "freertos/semphr.h"
 
 #define DL_RING_LINES 200
-#define DL_LINE_MAX   160
+// 링버퍼 1줄의 크기와, 그 안에 들어가는 본문의 최대 크기를 분리한다.
+// 접두부("ts | LEVEL | cat | traceId | ")의 최악 길이가 약 42바이트이므로
+// BODY_MAX + 42 < LINE_MAX 를 지켜야 -Werror=format-truncation 에 걸리지 않는다.
+#define DL_LINE_MAX   200
+#define DL_BODY_MAX   120
 
 static char            s_ring[DL_RING_LINES][DL_LINE_MAX];
 static uint16_t        s_ring_head;      // 다음에 쓸 위치
@@ -119,7 +123,7 @@ void dl_log(dl_cat_t c, dl_level_t l, const char *fmt, ...)
         s_dropped++;
         return;
     }
-    char body[DL_LINE_MAX];
+    char body[DL_BODY_MAX];
     va_list ap;
     va_start(ap, fmt);
     vsnprintf(body, sizeof(body), fmt, ap);
@@ -130,15 +134,20 @@ void dl_log(dl_cat_t c, dl_level_t l, const char *fmt, ...)
 // 오류는 레벨에 상관없이 항상 남긴다. domain/code/msg 3종 고정.
 void dl_err(dl_cat_t c, const char *domain, int code, const char *fmt, ...)
 {
-    char msg[DL_LINE_MAX];
-    va_list ap;
-    va_start(ap, fmt);
-    vsnprintf(msg, sizeof(msg), fmt, ap);
-    va_end(ap);
-
-    char body[DL_LINE_MAX];
-    snprintf(body, sizeof(body), "domain=%s code=%d msg=%s",
-             domain ? domain : "?", code, msg);
+    // domain/code 접두부를 먼저 쓰고, 남은 공간에만 msg를 붙인다.
+    // 중첩 %s 로 합치면 컴파일러가 최악 길이를 합산해 절단 경고를 낸다.
+    char body[DL_BODY_MAX];
+    int n = snprintf(body, sizeof(body), "domain=%s code=%d msg=",
+                     domain ? domain : "?", code);
+    if (n < 0) {
+        n = 0;
+    }
+    if ((size_t)n < sizeof(body)) {
+        va_list ap;
+        va_start(ap, fmt);
+        vsnprintf(body + n, sizeof(body) - (size_t)n, fmt, ap);
+        va_end(ap);
+    }
     dl_emit(c, DL_LVL_ERROR, body);
 }
 
