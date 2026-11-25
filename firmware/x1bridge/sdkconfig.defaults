@@ -1,0 +1,33 @@
+# --- 타깃 ---
+CONFIG_IDF_TARGET="esp32c3"
+CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
+
+# --- Bluetooth: NimBLE ---
+# ESP32-C3는 LE 전용이다(Classic Bluetooth 미지원). 마우스가 BLE HOGP이므로 문제 없다.
+CONFIG_BT_ENABLED=y
+CONFIG_BT_NIMBLE_ENABLED=y
+CONFIG_BT_NIMBLE_ROLE_PERIPHERAL=y
+CONFIG_BT_NIMBLE_ROLE_BROADCASTER=y
+# 아래 두 줄은 2단계(실제 마우스 중계)에서 쓰는 central 역할이다. 지금 켜 두어
+# 그때 설정 변경 없이 코드만 추가하면 되게 한다.
+CONFIG_BT_NIMBLE_ROLE_CENTRAL=y
+CONFIG_BT_NIMBLE_ROLE_OBSERVER=y
+CONFIG_BT_NIMBLE_MAX_CONNECTIONS=2
+
+# 2단계에서 마우스와 본딩한 LTK·IRK를 NVS에 남기기 위한 설정. 지금은 쓰지 않는다.
+# (우리가 애플TV에 노출하는 X1 특성은 평문이다 — 설정에서 페어링하지 않고 앱이 바로 붙게 한다.)
+CONFIG_BT_NIMBLE_NVS_PERSIST=y
+CONFIG_BT_NIMBLE_SM_LEGACY=y
+CONFIG_BT_NIMBLE_SM_SC=y
+
+# --- 콘솔: 내장 USB (USB Serial/JTAG) ---
+# 보드의 USB-C 하나로 플래싱과 로그를 모두 처리한다. 맥에 툴체인을 깔지 않는다.
+CONFIG_ESP_CONSOLE_UART_DEFAULT=n
+CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
+
+# --- 타이밍 ---
+# 100Hz 리포트와 50ms 메인 루프의 지터를 줄인다.
+CONFIG_FREERTOS_HZ=1000
+
+# --- 크기 ---
+CONFIG_COMPILER_OPTIMIZATION_SIZE=y

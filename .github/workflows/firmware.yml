@@ -1,0 +1,46 @@
+name: firmware
+
+# 맥에 ESP-IDF 툴체인을 설치하지 않는다(애플TV 작업과 같은 이유 — SSD 용량).
+# 빌드는 전부 여기서 하고, 산출물 merged.bin 을 브라우저 웹 플래셔로 보드에 굽는다.
+on:
+  push:
+    paths:
+      - 'firmware/**'
+      - '.github/workflows/firmware.yml'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build x1bridge (ESP-IDF v5.4 / esp32c3)
+        uses: espressif/esp-idf-ci-action@v1
+        with:
+          esp_idf_version: v5.4
+          target: esp32c3
+          path: 'firmware/x1bridge'
+          command: 'idf.py build && idf.py merge-bin -o build/x1bridge-merged.bin'
+
+      - name: Collect artifacts
+        run: |
+          set -eu
+          mkdir -p out
+          B=firmware/x1bridge/build
+          for f in x1bridge-merged.bin x1bridge.bin x1bridge.elf x1bridge.map flasher_args.json; do
+            if [ -f "$B/$f" ]; then cp "$B/$f" out/; fi
+          done
+          # 플래시 오프셋을 기록해 둔다. merged.bin 을 0x0 에 굽는 것이 기본이다.
+          {
+            echo "merged.bin  -> offset 0x0 (bootloader + partition table + app)"
+            echo "x1bridge.bin -> offset 0x10000 (app only)"
+            echo "chip: esp32c3, flash: 4MB, mode: dio"
+          } > out/FLASH.txt
+          ls -la out
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: x1bridge-firmware
+          path: out/
+          if-no-files-found: error
