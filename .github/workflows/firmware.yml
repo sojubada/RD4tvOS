@@ -21,7 +21,8 @@ jobs:
           esp_idf_version: v5.4
           target: esp32c3
           path: 'firmware/x1bridge'
-          command: 'idf.py build && idf.py merge-bin -o build/x1bridge-merged.bin'
+          # merge-bin 은 build 디렉터리 안에서 실행된다. 출력 경로에 build/ 를 붙이면 build/build/ 가 된다.
+          command: 'idf.py build && idf.py merge-bin -o x1bridge-merged.bin'
 
       - name: Collect artifacts
         run: |
