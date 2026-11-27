@@ -211,6 +211,16 @@ CFG_ARGS=(
   -DWITH_OPENSSL=ON -DOPENSSL_USE_STATIC_LIBS=ON
   # 1차 결과 반영: json-c 헤더를 못 찾아 winpr/utils/json 이 깨졌다. 코어 RDP 에 불필요하다.
   -DWITH_JSON_DISABLED=ON
+  # NTLM 은 MD4 와 RC4 를 쓴다. winpr 의 기본 경로는 OpenSSL 의
+  # EVP_get_digestbyname("md4") / EVP_CIPHER_fetch("RC4") 인데, OpenSSL 3.x 에서는
+  # 둘 다 legacy 프로바이더에 있어 로드하지 않으면 NULL 이 돌아오고 NTLM 이 실패한다.
+  # 컴파일은 통과하므로 기기에서 NLA 단계에만 터진다 — 가장 늦게 드러나는 종류의 결함이다.
+  #
+  # 기본값 분기가 if(WITH_MBEDTLS) 라서 OpenSSL 사용 시 둘 다 OFF 가 된다(버전과 무관).
+  # 정적 OpenSSL 에 프로바이더를 심는 대신 winpr 의 내장 구현을 쓴다 — md4.c 는
+  # 공개 도메인 구현이고 rc4 도 상류가 지원하는 옵션이다. 런타임 초기화 코드가 없어진다.
+  -DWITH_INTERNAL_RC4=ON
+  -DWITH_INTERNAL_MD4=ON
   # 3차에서 libfreerdp3.a 의 멤버가 전부 LLVM 비트코드(LTO)로 나왔다. 비트코드에는
   # LC_BUILD_VERSION 이 없어 플랫폼을 확인할 수 없다 — 스파이크의 목적이 바로 그 확인이다.
   # 앱에서는 LTO 를 다시 켜도 되지만, 여기서는 끄고 실제 Mach-O 를 받는다.
@@ -246,7 +256,7 @@ if [ -d "$BUILD" ]; then
     echo ""
     echo '```'
     grep -iE '^(WITH_)?(H264|VIDEOTOOLBOX|OPENH264|MEDIACODEC|DSP|OPENSSL|MBEDTLS|ZLIB|SIMD|NEON)[A-Z_]*:' \
-      "$OUT/cmake-cache.txt" | head -20
+      "$OUT/cmake-cache.txt" | head -24
     echo '```'
     echo ""
   } >> "$REPORT"
