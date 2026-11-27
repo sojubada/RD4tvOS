@@ -112,9 +112,11 @@ if [ ! -d "$WORK/openssl-apple" ]; then
 fi
 if [ -d "$WORK/openssl-apple" ]; then
   # 타깃 이름을 추측하지 않고 --help 가 알려주는 목록에서 골라낸다.
+  # 1차 스파이크는 여기서 시뮬레이터 타깃(tvos-sim-cross-arm64)을 집어 실패했다.
+  # 기기 타깃만 고르도록 'sim' 을 배제하고, 옵션 플래그(--tvos-sdk 류)도 걸러낸다.
   ( cd "$WORK/openssl-apple" && ./build-libssl.sh --help ) > "$OUT/openssl-targets.txt" 2>&1
-  SSL_TARGET="$(grep -oE '[A-Za-z0-9_.-]*tvos[A-Za-z0-9_.-]*arm64[A-Za-z0-9_.-]*' "$OUT/openssl-targets.txt" | head -1)"
-  [ -z "$SSL_TARGET" ] && SSL_TARGET="$(grep -oiE '[A-Za-z0-9_.-]*tvos[A-Za-z0-9_.-]*' "$OUT/openssl-targets.txt" | grep -iv sim | head -1)"
+  SSL_TARGET="$(grep -oE '\btvos-[a-z0-9_-]*arm64\b' "$OUT/openssl-targets.txt" \
+                | grep -v sim | sort -u | head -1)"
   echo "openssl target = ${SSL_TARGET:-<없음>}"
   if [ -n "$SSL_TARGET" ]; then
     ( cd "$WORK/openssl-apple" && ./build-libssl.sh --targets="$SSL_TARGET" ) \
@@ -150,17 +152,28 @@ fi
       echo "  - \`$(basename "$f")\` platform=$(macho_platform "$f") minos=$(macho_minos "$f") arch=$(lipo -archs "$f" 2>/dev/null)"
     done
   else
-    echo "- **TVOS 플랫폼 libcrypto 를 찾지 못했다.** 아래 configure 는 실패할 것이다."
+    echo "- **TVOS 플랫폼 libcrypto 를 찾지 못했다.**"
+    echo "- 1차 스파이크에서는 이 상태로 configure 가 통과했는데, CMake 가"
+    echo "  homebrew 의 **macOS** libcrypto 를 집었기 때문이다. 거짓 통과를 막기 위해"
+    echo "  이제 여기서 중단한다."
   fi
   echo ""
 } >> "$REPORT"
+
+if [ -z "$SSL_ROOT" ]; then
+  note "## 중단"
+  note ""
+  note "tvOS OpenSSL 이 준비되지 않았다. 이 상태로 configure 하면 CMake 가 호스트(macOS)"
+  note "라이브러리를 집어 **거짓 통과**가 난다 — 1차 스파이크에서 실제로 그랬다."
+  cat "$REPORT"
+  exit 1
+fi
 
 # ------------------------------------------------------- 4. configure
 say "4. configure"
 BUILD="$WORK/build-tvos"
 rm -rf "$BUILD"
 CFG_ARGS=(
-  -S "$WORK/FreeRDP" -B "$BUILD"
   -DCMAKE_TOOLCHAIN_FILE="$TOOLCHAIN"
   -DPLATFORM=TVOS -DIOS_PLATFORM=TVOS
   -DDEPLOYMENT_TARGET="$DEPLOY_TARGET"
@@ -179,9 +192,16 @@ CFG_ARGS=(
   -DWITH_FFMPEG=OFF -DWITH_SWSCALE=OFF -DWITH_CAIRO=OFF
   -DWITH_OPENH264=OFF -DWITH_LIBSYSTEMD=OFF -DWITH_SOXR=OFF
   -DWITH_OPENSSL=ON -DOPENSSL_USE_STATIC_LIBS=ON
+  # 1차 결과 반영: json-c 헤더를 못 찾아 winpr/utils/json 이 깨졌다. 코어 RDP 에 불필요하다.
+  -DWITH_JSON_DISABLED=ON
+  # 1차 결과 반영: process.c 의 fork/execve 가 tvOS 에서 unavailable.
+  # 벤더 소스를 고치지 않고 강제 포함 헤더로 실패 스텁을 넣는다.
+  -DCMAKE_C_FLAGS="-include $ROOT/tvos_shim.h"
+  -DCMAKE_CXX_FLAGS="-include $ROOT/tvos_shim.h"
+  -DCMAKE_OBJC_FLAGS="-include $ROOT/tvos_shim.h"
 )
 [ -n "$SSL_ROOT" ] && CFG_ARGS+=( -DOPENSSL_ROOT_DIR="$SSL_ROOT" -DOPENSSL_INCLUDE_DIR="$SSL_ROOT/include" )
-cmake "${CFG_ARGS[@]}" > "$OUT/configure.log" 2>&1
+cmake -S "$WORK/FreeRDP" -B "$BUILD" "${CFG_ARGS[@]}" > "$OUT/configure.log" 2>&1
 CFG_RC=$?
 echo "configure rc = $CFG_RC"
 {
@@ -306,6 +326,55 @@ done < <(find "$BUILD" -name 'lib*.a' 2>/dev/null | grep -Ei 'freerdp|winpr')
   echo ""
 } >> "$REPORT"
 
+# ------------- 8.5 VideoToolbox tvOS 분기 추가 시도 (불확실성 #3)
+say "8.5 VideoToolbox"
+VT_PATCH="미시도"
+VT_CFG_RC="-"
+VT_BUILD_RC="-"
+VT_OBJ="없음"
+VTFILE="$WORK/FreeRDP/cmake/ConfigOptionsVideoToolbox.cmake"
+if [ "$FOUND" -gt 0 ] && [ -f "$VTFILE" ]; then
+  VT_PATCH="$(python3 "$ROOT/patch_videotoolbox.py" "$VTFILE" 2>&1)"
+  if [ "$VT_PATCH" = "패치됨" ] || [ "$VT_PATCH" = "이미적용" ]; then
+    BUILD_VT="$WORK/build-tvos-vt"
+    rm -rf "$BUILD_VT"
+    cmake -S "$WORK/FreeRDP" -B "$BUILD_VT" "${CFG_ARGS[@]}" \
+      -DWITH_APPLE_VIDEOTOOLBOX=ON > "$OUT/configure-vt.log" 2>&1
+    VT_CFG_RC=$?
+    if [ $VT_CFG_RC -eq 0 ]; then
+      cmake --build "$BUILD_VT" --config Release -- -k -j3 > "$OUT/build-vt.log" 2>&1
+      VT_BUILD_RC=$?
+      found_obj="$(find "$BUILD_VT" -name 'h264_videotoolbox*.o' 2>/dev/null | head -1)"
+      [ -n "$found_obj" ] && VT_OBJ="$(basename "$found_obj")"
+    fi
+  fi
+fi
+{
+  echo "## 8.5 VideoToolbox — tvOS 분기 추가 시도 (불확실성 #3)"
+  echo ""
+  echo "상류 게이트는 CMAKE_SYSTEM_NAME 이 Darwin(macOS) 또는 iOS 일 때만 켠다."
+  echo "tvOS 는 두 분기 어디에도 걸리지 않아 기본 OFF 이고, 강제로 켜면 FATAL_ERROR 가 난다."
+  echo "**코드 제약이 아니라 CMake 조건이다** — 디코더가 쓰는 VideoToolbox API 는 tvOS SDK 에 있다."
+  echo ""
+  echo "| 항목 | 결과 |"
+  echo "|---|---|"
+  echo "| 조건 패치 | $VT_PATCH |"
+  echo "| configure | $VT_CFG_RC |"
+  echo "| build | $VT_BUILD_RC |"
+  echo "| h264_videotoolbox 오브젝트 | $VT_OBJ |"
+  echo ""
+  if [ -f "$OUT/build-vt.log" ] && grep -qE 'error:' "$OUT/build-vt.log"; then
+    echo "오류:"
+    echo '```'
+    grep -E 'error:' "$OUT/build-vt.log" | sed 's/^.*error: //' | sort -u | head -15
+    echo '```'
+    echo ""
+  fi
+  echo "H.264 는 RDP 의 **선택적** 코덱이다(RemoteFX·NSCodec·Planar 로 폴백된다)."
+  echo "여기서 실패해도 RDP 자체는 성립하고, 4K 성능에만 영향이 있다."
+  echo ""
+} >> "$REPORT"
+
 # ------------------------------------------------------- 9. 판정
 say "9. 판정"
 {
@@ -319,9 +388,14 @@ say "9. 판정"
     echo "**부분 성공.** 일부가 빌드됐다. §6 결손 표의 건수로 패치 범위를 판단한다."
     echo ""
     echo "- 결손이 소수이고 winpr 한두 파일에 몰려 있으면 A안 계속."
-    echo "- 광범위하면 **폴백으로 전환**한다."
+    echo "- 광범위하면 폴백으로 전환."
+  elif [ "$ERRS" -le 10 ]; then
+    echo "**유망하나 미완.** 산출물은 없지만 오류가 $ERRS 건뿐이다."
+    echo ""
+    echo "오류가 적고 한두 파일에 몰려 있으면 이것은 포팅 불가가 아니라 설정·스텁 문제다."
+    echo "§5 오류 목록과 §6 결손 표로 다음 수를 정하고, 폴백으로 넘어가기 전에 한 번 더 돌린다."
   else
-    echo "**실패.** 코어가 tvOS 로 빌드되지 않았다. 폴백으로 전환한다."
+    echo "**실패.** 오류가 $ERRS 건으로 광범위하다. 폴백으로 전환한다."
     echo ""
     echo "앱 코드를 쓰지 않았으므로 손실은 CI 시간뿐이다."
   fi
