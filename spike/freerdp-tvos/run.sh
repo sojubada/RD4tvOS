@@ -27,7 +27,19 @@ note() { printf '%s\n' "$*" >> "$REPORT"; }
 
 # .a 안의 Mach-O 로드 커맨드에서 플랫폼을 읽는다. 문서를 믿지 않는 지점.
 macho_platform() {
-  otool -lv "$1" 2>/dev/null | awk '/LC_BUILD_VERSION/{f=1} f&&/platform/{print $2; exit}'
+  local p
+  p="$(otool -lv "$1" 2>/dev/null | awk '/LC_BUILD_VERSION/{f=1} f&&/platform/{print $2; exit}')"
+  if [ -n "$p" ]; then
+    printf '%s' "$p"
+    return
+  fi
+  # 판독 실패를 '?' 로 뭉개지 않는다. LTO 아카이브는 멤버가 LLVM 비트코드여서
+  # 로드 커맨드가 아예 없다 — 플랫폼 미확인이지 빌드 실패가 아니다.
+  if grep -qa 'BC.\xc0\xde' "$1" 2>/dev/null || otool -lv "$1" 2>&1 | grep -qi 'bitcode\|not an object'; then
+    printf 'BITCODE(LTO-확인불가)'
+  else
+    printf '판독실패'
+  fi
 }
 macho_minos() {
   otool -lv "$1" 2>/dev/null | awk '/LC_BUILD_VERSION/{f=1} f&&/ minos /{print $2; exit}'
@@ -199,6 +211,10 @@ CFG_ARGS=(
   -DWITH_OPENSSL=ON -DOPENSSL_USE_STATIC_LIBS=ON
   # 1차 결과 반영: json-c 헤더를 못 찾아 winpr/utils/json 이 깨졌다. 코어 RDP 에 불필요하다.
   -DWITH_JSON_DISABLED=ON
+  # 3차에서 libfreerdp3.a 의 멤버가 전부 LLVM 비트코드(LTO)로 나왔다. 비트코드에는
+  # LC_BUILD_VERSION 이 없어 플랫폼을 확인할 수 없다 — 스파이크의 목적이 바로 그 확인이다.
+  # 앱에서는 LTO 를 다시 켜도 되지만, 여기서는 끄고 실제 Mach-O 를 받는다.
+  -DCMAKE_INTERPROCEDURAL_OPTIMIZATION=OFF
   # 1차 결과 반영: process.c 의 fork/execve 가 tvOS 에서 unavailable.
   # 벤더 소스를 고치지 않고 강제 포함 헤더로 실패 스텁을 넣는다.
   -DCMAKE_C_FLAGS="-include $ROOT/tvos_shim.h"
@@ -249,7 +265,8 @@ else
 fi
 echo "build rc = $BUILD_RC"
 
-ERRS=$(grep -cE 'error:' "$OUT/build.log" 2>/dev/null || echo 0)
+ERRS=$(grep -cE 'error:' "$OUT/build.log" 2>/dev/null || true)
+ERRS=${ERRS:-0}
 {
   echo "## 5. 빌드"
   echo ""
