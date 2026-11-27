@@ -119,7 +119,12 @@ if [ -d "$WORK/openssl-apple" ]; then
                 | grep -v sim | sort -u | head -1)"
   echo "openssl target = ${SSL_TARGET:-<없음>}"
   if [ -n "$SSL_TARGET" ]; then
-    ( cd "$WORK/openssl-apple" && ./build-libssl.sh --targets="$SSL_TARGET" ) \
+    # --deprecated 가 필요하다. 2차 스파이크에서 libfreerdp/crypto/tls.c:730 이
+    # SSL_get_peer_certificate 를 못 찾아 깨졌다. OpenSSL 3.x 는 그 이름을 헤더의
+    # 호환 매크로로만 두는데, 기본값인 no-deprecated 로 빌드하면 그 매크로가 사라진다.
+    # tvOS 와 무관한 OpenSSL 설정 문제였다.
+    ( cd "$WORK/openssl-apple" && ./build-libssl.sh --targets="$SSL_TARGET" \
+        --deprecated --min-tvos-sdk="$DEPLOY_TARGET" ) \
       > "$OUT/openssl-build.log" 2>&1
     SSL_RC=$?
   else
