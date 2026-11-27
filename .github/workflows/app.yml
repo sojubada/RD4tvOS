@@ -1,0 +1,79 @@
+name: app
+
+# RD4tvOS Probe (1a) 빌드. 맥에 Xcode 가 없으므로 전부 여기서 돈다.
+# 애플TV 는 GitHub 릴리즈 공개 URL 의 IPA 만 설치하므로, 기기에서 돌려 볼 때는
+# release=true 로 디스패치해 릴리즈를 만든다. 기본은 아티팩트만 만든다.
+on:
+  workflow_dispatch:
+    inputs:
+      release:
+        description: '릴리즈까지 만들기 (애플TV 설치용)'
+        type: boolean
+        default: false
+      freerdp_ref:
+        description: 'FreeRDP 태그 (비우면 최신 3.x)'
+        required: false
+        default: ''
+  push:
+    paths:
+      - 'app/**'
+      - '.github/workflows/app.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select Xcode
+        run: sudo xcode-select -s /Applications/Xcode_16.app || xcode-select -p
+
+      - name: Build probe app
+        id: build
+        continue-on-error: true
+        shell: bash
+        env:
+          FREERDP_REF: ${{ inputs.freerdp_ref != '' && inputs.freerdp_ref || 'auto' }}
+          DEPLOY_TARGET: '16.0'
+          WORK: ${{ runner.temp }}/app-work
+          OUT: ${{ github.workspace }}/app-out
+        run: bash app/build.sh 2>&1 | tee "$GITHUB_WORKSPACE/app-out/console.log" || true
+
+      - name: Error digest
+        if: always()
+        shell: bash
+        run: |
+          set +e
+          echo "## 빌드 요약" >> "$GITHUB_STEP_SUMMARY"
+          for f in app-out/*.log; do
+            [ -f "$f" ] || continue
+            n=$(grep -cE 'error:|CMake Error|FAILED' "$f")
+            echo "- \`$(basename "$f")\` — error 줄 $n" >> "$GITHUB_STEP_SUMMARY"
+          done
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          grep -hE 'error:|CMake Error|FAILED|Undefined symbol' app-out/*.log 2>/dev/null \
+            | sed 's#/Users/runner/[^ ]*/##g' | sort -u | head -40 >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          ls -la app-out/ >> "$GITHUB_STEP_SUMMARY" 2>&1 || true
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: rd4tvos-probe
+          path: app-out/
+          if-no-files-found: warn
+
+      - name: Create release
+        if: ${{ inputs.release && hashFiles('app-out/rd4tvos-probe.ipa') != '' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="probe-1a-${{ github.run_number }}"
+          gh release create "$TAG" app-out/rd4tvos-probe.ipa \
+            --title "RD4tvOS Probe 1a (build ${{ github.run_number }})" \
+            --notes "NTLM 토큰 생성 시험(1a) + 키보드 프로브. 애플TV 에서 TrollStore 로 설치한다."
