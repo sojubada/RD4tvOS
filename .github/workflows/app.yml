@@ -41,7 +41,9 @@ jobs:
           DEPLOY_TARGET: '16.0'
           WORK: ${{ runner.temp }}/app-work
           OUT: ${{ github.workspace }}/app-out
-        run: bash app/build.sh 2>&1 | tee "$GITHUB_WORKSPACE/app-out/console.log" || true
+        run: |
+          mkdir -p "$OUT"
+          bash app/build.sh 2>&1 | tee "$OUT/console.log" || true
 
       - name: Error digest
         if: always()

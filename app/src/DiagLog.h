@@ -67,9 +67,13 @@ typedef NS_ENUM(NSInteger, DLLevel) {
 
 @end
 
-#define DLogI(cat, ...) [DiagLog log:(cat) level:DLLevelInfo  format:__VA_ARGS__]
-#define DLogW(cat, ...) [DiagLog log:(cat) level:DLLevelWarn  format:__VA_ARGS__]
-#define DLogD(cat, ...) [DiagLog log:(cat) level:DLLevelDebug format:__VA_ARGS__]
-#define DLogE(cat, dom, code, ...) [DiagLog error:(cat) domain:(dom) code:(code) format:__VA_ARGS__]
+// 매크로 파라미터 이름이 Objective-C 셀렉터 키워드와 같으면 전처리기가 셀렉터까지
+// 치환한다. code:(code) 가 -1:(-1) 이 되어 'error:domain::format:' 을 찾는 오류가 났다.
+// 그래서 파라미터 이름 뒤에 밑줄을 붙인다.
+#define DLogI(cat_, ...) [DiagLog log:(cat_) level:DLLevelInfo  format:__VA_ARGS__]
+#define DLogW(cat_, ...) [DiagLog log:(cat_) level:DLLevelWarn  format:__VA_ARGS__]
+#define DLogD(cat_, ...) [DiagLog log:(cat_) level:DLLevelDebug format:__VA_ARGS__]
+#define DLogE(cat_, dom_, code_, ...) \
+    [DiagLog error:(cat_) domain:(dom_) code:(code_) format:__VA_ARGS__]
 
 NS_ASSUME_NONNULL_END
